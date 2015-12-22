@@ -1,0 +1,114 @@
+---
+title: "Practical Machine Learning Project"
+author: "Bryan Cole"
+date: "Tuesday, December 22, 2015"
+output: html_document
+---
+
+## Introduction
+
+Using devices such as *Jawbone Up*, *Nike FuelBand*, and *Fitbit* it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify *how much* of a particular activity they do, but they rarely quantify *how well they do it*. The data pertaining to this analysis come from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly (1 possibility) and incorrectly (4 possibilities). **The overall goal of the analysis is to  predict the manner in which the participants did the exercise by using machine learning techniques (i.e. predict activity quality from activity monitors)**. The 5 different outcome classifications are: exactly according to the specification (Class A), throwing elbows to the front (class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D), and throwing the hips to the front (Class E).
+
+## Loading Packages/Data
+
+The following packages need to be loaded to perform the analysis. Also, I set the seed for any random number generation used in the project here at the beginning in order to ensure reproducibility.
+```{r,results='hide',message=FALSE,warning=FALSE}
+library(ggplot2) 
+library(caret) 
+library(gridExtra)
+library(randomForest) 
+set.seed(12345)
+```
+
+
+The data used is the *Weight Lifting Exercises Dataset* which comes from *Groupware*. More information can be found at their website [here](http://groupware.les.inf.puc-rio.br/har). The following code is used to read in/load the training and test datasets into R. The test dataset provided can be viewed/named as a holdout dataset since I'll be performing cross-validation with the training set. 
+```{r,cache=TRUE}
+# download data from appropriate URL, save in working directory
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",destfile="training.csv")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",destfile="test.csv")
+
+# load data into project environment
+train <- read.csv("training.csv",na.strings=c("NA","#DIV/0!",""))
+holdout <- read.csv("test.csv",na.strings=c("NA","#DIV/0!","")) 
+```
+The training set contains **19622** observations of **160** variables.
+
+### Train Data Preprocessing
+
+Some data preprocessing steps need to be performed. First, I remove any variables with over **95%** missing data (which turns out to be 100 variables). Next, it's easy to see the first seven variables are not relevant to the question being analyzed. That is, they do not correspond to the movement sensors and thus they are eliminated. Finally, the exact same processing is done to the holdout set in order for the model to work on the holdout data correctly.
+```{r}
+highNA <- sapply(train,function(x)mean(is.na(x))) > 0.95
+train <- train[,highNA==F]
+train <- train[,-c(1:7)]
+holdout <- holdout[,which(colnames(holdout) %in% colnames(train))]
+```
+
+## Partitioning the Data
+
+Next, I split the training set further into training and testing subsets. 60% goes to the new training set, and 40% goes to the new test set. The model is built and cross-validated on this new training set, and tested on the new test set in order to estimate the out of sample error. Again, this is why the original test data provided can be viewed as a holdout set.
+```{r}
+trainPart <- createDataPartition(train$classe,p=0.6,list=FALSE)
+newtrain <- train[trainPart,]
+newtest <- train[-trainPart,]
+```
+
+## The Model
+
+The classification model being used is the Random Forest method. This produced the best results compared to other choices such as Multinomial Logistic Regression, Naive Bayes, and Decision Trees. Principal Component Analysis was also attempted, but it greatly reduced prediction accuracy which is not surprising since PCA is best-suited for linear-type models (for example GLM and LDA). 
+
+It is extremely important to use **cross-validation** when running random forest algorithms. The following code runs the random forest model with 3-fold cross validation due to computational costs.
+```{r,cache=TRUE}
+rf <- train(classe ~ ., data=newtrain, method="rf", trControl=trainControl(method="cv",number=3), prox=TRUE,importance=TRUE,ntree=75)
+
+print(rf)
+```
+
+#### Variable Importance
+
+It's interesting to see which variables are the most "important" in the building of the model:
+```{r}
+varImp(rf)
+```
+
+I now produce some plots  of the most important variables vs. each other to show the intricacy of the data and why the random forest model works better here as opposed to say, a decision tree which would require a large number of yes/no statements to find all of the different variations for each outcome. 
+```{r}
+plot1 <- qplot(pitch_belt,roll_belt,colour=classe,data=newtrain)
+plot2 <- qplot(pitch_belt,magnet_dumbbell_z,colour=classe,data=newtrain)
+grid.arrange(plot1,plot2,ncol=2)
+```
+
+## Expected Out of Sample Error
+
+The following plots are very useful in evaluating the model.
+```{r}
+plot(rf)
+```
+```{r}
+plot(rf$finalModel, main="Random Forest Error vs. Number of Trees")
+```
+
+
+I now apply the same random forest model to the sub-test data and show the confusion matrix in order to estimate the out of sample error rate.
+```{r}
+pred <- predict(rf, newtest)
+confusionMatrix(pred, newtest$classe)
+```
+
+We can conclude that this random forest model is a **higly** predictive model with an estimated out of sample error rate of 1 - .9906 = **0.94%**. 
+
+The last step is to predict the outcomes of the 20  test cases in the holdout set (this is required as part of the project submission by Coursera). The model correctly predicts **all** outcomes. 
+```{r}
+holdpred <- predict(rf,newdata=holdout)
+holdpred <- as.character(holdpred)
+
+pml_write_files <- function(x){
+    n <- length(x)
+    for(i in 1:n){
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=FALSE, row.names = FALSE, col.names = FALSE)
+    }
+}
+
+# setwd("submission")
+pml_write_files(holdpred)
+```
